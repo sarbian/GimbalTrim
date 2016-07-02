@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
 namespace GimbalTrim
@@ -11,15 +12,15 @@ namespace GimbalTrim
         [KSPField(isPersistant = false)]
         public string gimbalTransformName = "thrustTransform";
 
-        // Backup of the backup of the default engine rotation
+        // Copy of the default engine rotation
         public List<Quaternion> originalInitalRots;
 
         private ModuleGimbal gimbal;
-
+        
         //[KSPField(isPersistant = true, guiActive = false, guiActiveEditor = true, guiName = "Auto-Trim Limit"),
         // UI_FloatEdit(minValue = 0f, maxValue = 90f, scene = UI_Scene.Editor, stepIncrement = 5f)]
         [KSPField(isPersistant = false)]
-        public float trimRange = 45f;
+        public float trimRange = 30f;
 
         [KSPField]
         public float trimRangeXP = -1f;
@@ -43,7 +44,7 @@ namespace GimbalTrim
             set { trimX = Mathf.Clamp(value, -trimRangeXN, trimRangeXP); }
         }
 
-        public float lastTrimX = 0; // remember the last value to know when to update the editor
+        public float lastTrimX = 0;
 
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Y-Trim"),
          UI_FloatRange(minValue = -14f, maxValue = 14f, stepIncrement = 0.5f)]
@@ -55,7 +56,11 @@ namespace GimbalTrim
             set { trimY = Mathf.Clamp(value, -trimRangeYN, trimRangeYP); }
         }
 
-        public float lastTrimY = 0; // remember the last value to know when to update the editor
+        public float lastTrimY = 0;
+
+        [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Trim"),
+         UI_Toggle(disabledText = "Disabled", enabledText = "Enabled")]
+        public bool enableTrim = true;
 
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Method"),
          UI_Toggle(disabledText = "Precise", enabledText = "Smooth")]
@@ -63,14 +68,7 @@ namespace GimbalTrim
 
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Speed"),
          UI_FloatRange(minValue = 1f, maxValue = 100.0f, stepIncrement = 1f)]
-        public float responseSpeed = 60;
-
-        //[KSPAction("Toggle Gimbal")]
-        //public void toggleGimbal(KSPActionParam param)
-        //{
-        //    enableGimbal = !enableGimbal;
-        //    resetTransform();
-        //}
+        public float trimResponseSpeed = 60;
 
         [KSPAction("X Trim +")]
         public void plusTrimX(KSPActionParam param)
@@ -120,15 +118,14 @@ namespace GimbalTrim
             TrimY -= 5f;
         }
 
-        //[KSPAction("Toggle Trim")]
-        //public void toggleTrim(KSPActionParam param)
-        //{
-        //    enableTrim = !enableTrim;
-        //}
+        [KSPAction("Toggle Trim")]
+        public void toggleTrim(KSPActionParam param)
+        {
+            enableTrim = !enableTrim;
+        }
 
         public override void OnLoad(ConfigNode node)
         {
-            print("OnLoad");
             if (trimRangeXP < 0f)
             {
                 trimRangeXP = trimRange;
@@ -159,8 +156,6 @@ namespace GimbalTrim
                 return;
             }
 
-            print("OnStart");
-
             for (int i = 0; i < gimbal.initRots.Count; i++)
             {
                 originalInitalRots.Add(gimbal.initRots[i]);
@@ -183,13 +178,16 @@ namespace GimbalTrim
             trimYRange.stepIncrement = trimRangeXN + trimRangeYN >= 10f ? 1f : trimRangeXN + trimRangeYN >= 5f ? 0.5f : 0.25f;
         }
 
+        private float lastEditorTime = 0;
+
         public void Update()
         {
             if (gimbal == null)
                 return;
 
-            if (HighLogic.LoadedSceneIsEditor)
+            if (HighLogic.LoadedSceneIsEditor && Time.time > lastEditorTime + TimeWarp.fixedDeltaTime)
             {
+                lastEditorTime = Time.time;
                 FixedUpdate();
                 int count = originalInitalRots.Count;
                 for (int i = 0; i < count; i++)
@@ -203,11 +201,22 @@ namespace GimbalTrim
         {
             if (gimbal == null)
                 return;
-
             int count = originalInitalRots.Count;
             for (int i = 0; i < count; i++)
             {
-                gimbal.initRots[i] = originalInitalRots[i] * Quaternion.AngleAxis(trimX, Vector3.right) * Quaternion.AngleAxis(trimY, Vector3.up);
+                float x = enableTrim ? trimX : 0;
+                float y = enableTrim ? trimY : 0;
+
+                if (useTrimlResponseSpeed)
+                {
+                    float timeFactor = trimResponseSpeed * TimeWarp.fixedDeltaTime;
+                    x = Mathf.Lerp(lastTrimX, x, timeFactor);
+                    y = Mathf.Lerp(lastTrimY, y, timeFactor);
+                }
+                lastTrimX = x;
+                lastTrimY = y;
+
+                gimbal.initRots[i] = originalInitalRots[i] * Quaternion.AngleAxis(x, Vector3.right) * Quaternion.AngleAxis(y, Vector3.up);
             }
         }
 
