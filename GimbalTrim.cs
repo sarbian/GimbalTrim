@@ -232,7 +232,7 @@ namespace GimbalTrim
             for (int i = 0; i < count; i++)
             {
                 currentTrim.x = enableTrim ? trimX : 0;
-                currentTrim.z = enableTrim ? trimY : 0;
+                currentTrim.y = enableTrim ? trimY : 0;
 
                 Transform gimbalTransform = gimbal.gimbalTransforms[i];
 
@@ -243,7 +243,7 @@ namespace GimbalTrim
                     sign = -1f;
                 }
 
-                Vector3 localTrim = gimbalTransform.InverseTransformDirection(vesselTransform.TransformDirection(sign * currentTrim));
+                Vector3 localTrim = sign * currentTrim;
 
                 if (useTrimResponseSpeed)
                 {
