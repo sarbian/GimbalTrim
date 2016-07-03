@@ -1,6 +1,5 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.InteropServices;
 using UnityEngine;
 
 namespace GimbalTrim
@@ -16,9 +15,19 @@ namespace GimbalTrim
         public List<Quaternion> originalInitalRots;
 
         private ModuleGimbal gimbal;
+
+        private float lastEditorTime = 0;
         
-        //[KSPField(isPersistant = true, guiActive = false, guiActiveEditor = true, guiName = "Auto-Trim Limit"),
-        // UI_FloatEdit(minValue = 0f, maxValue = 90f, scene = UI_Scene.Editor, stepIncrement = 5f)]
+        private Vector3 currentTrim;
+        private Vector3[] oldLocalTrim;
+
+        [KSPField(isPersistant = false)]
+        public bool limitToGimbalRange = false;
+
+        // The range have 2 uses :
+        // When limitToGimbalRange is false they store the max range of the trimming
+        // When limitToGimbalRange is true they store the gimbal initial max range
+        
         [KSPField(isPersistant = false)]
         public float trimRange = 30f;
 
@@ -44,8 +53,6 @@ namespace GimbalTrim
             set { trimX = Mathf.Clamp(value, -trimRangeXN, trimRangeXP); }
         }
 
-        public float lastTrimX = 0;
-
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Y-Trim"),
          UI_FloatRange(minValue = -14f, maxValue = 14f, stepIncrement = 0.5f)]
         public float trimY = 0;
@@ -56,15 +63,13 @@ namespace GimbalTrim
             set { trimY = Mathf.Clamp(value, -trimRangeYN, trimRangeYP); }
         }
 
-        public float lastTrimY = 0;
-
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Trim"),
          UI_Toggle(disabledText = "Disabled", enabledText = "Enabled")]
         public bool enableTrim = true;
 
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Method"),
          UI_Toggle(disabledText = "Precise", enabledText = "Smooth")]
-        public bool useTrimlResponseSpeed = false;
+        public bool useTrimResponseSpeed = false;
 
         [KSPField(isPersistant = true, guiActive = true, guiActiveEditor = true, guiName = "Speed"),
          UI_FloatRange(minValue = 1f, maxValue = 100.0f, stepIncrement = 1f)]
@@ -124,8 +129,19 @@ namespace GimbalTrim
             enableTrim = !enableTrim;
         }
 
-        public override void OnLoad(ConfigNode node)
+        public void InitRange()
         {
+            if (limitToGimbalRange)
+            {
+                trimRange = gimbal.gimbalRange;
+                trimRangeXP = gimbal.gimbalRangeXP;
+                trimRangeYP = gimbal.gimbalRangeYP;
+                trimRangeXN = gimbal.gimbalRangeXN;
+                trimRangeYN = gimbal.gimbalRangeYN;
+            }
+
+            //print("Ranges = " + trimRange.ToString("F1") + " " + trimRangeXN.ToString("F1") + " " + trimRangeXP.ToString("F1") + " " + trimRangeYN.ToString("F1") + " " + trimRangeYP.ToString("F1"));
+
             if (trimRangeXP < 0f)
             {
                 trimRangeXP = trimRange;
@@ -142,6 +158,8 @@ namespace GimbalTrim
             {
                 trimRangeYN = trimRangeYP;
             }
+
+            //print("Ranges = " + trimRangeXN.ToString("F1") + " " + trimRangeXP.ToString("F1") + " " + trimRangeYN.ToString("F1") + " " + trimRangeYP.ToString("F1"));
         }
 
         public override void OnStart(StartState state)
@@ -156,29 +174,30 @@ namespace GimbalTrim
                 return;
             }
 
+            InitRange();
+
             for (int i = 0; i < gimbal.initRots.Count; i++)
             {
                 originalInitalRots.Add(gimbal.initRots[i]);
             }
+            oldLocalTrim = new Vector3[gimbal.initRots.Count];
 
             BaseField trimXField = Fields["trimX"];
-            trimXField.guiActive = trimRangeXP > 0 || trimRangeXN > 0;
-            trimXField.guiActiveEditor = trimRangeXP > 0 || trimRangeXN > 0;
+            trimXField.guiActive = trimRangeXP + trimRangeXN > 0;
+            trimXField.guiActiveEditor = trimRangeXP + trimRangeXN > 0;
             UI_FloatRange trimXRange = (UI_FloatRange) (state == StartState.Editor ? trimXField.uiControlEditor : trimXField.uiControlFlight);
             trimXRange.minValue = -trimRangeXN;
             trimXRange.maxValue = trimRangeXP;
             trimXRange.stepIncrement = trimRangeXP + trimRangeXN >= 20f ? 1f : trimRangeXP + trimRangeXN >= 10f ? 0.5f : 0.25f;
 
             BaseField trimYField = Fields["trimY"];
-            trimYField.guiActive = trimRangeYP > 0 || trimRangeYN > 0;
-            trimYField.guiActiveEditor = trimRangeYP > 0 || trimRangeYN > 0;
+            trimYField.guiActive = trimRangeYP + trimRangeYN > 0;
+            trimYField.guiActiveEditor = trimRangeYP + trimRangeYN > 0;
             UI_FloatRange trimYRange = (UI_FloatRange) (state == StartState.Editor ? trimYField.uiControlEditor : trimYField.uiControlFlight);
             trimYRange.minValue = -trimRangeYN;
             trimYRange.maxValue = trimRangeYP;
             trimYRange.stepIncrement = trimRangeXN + trimRangeYN >= 10f ? 1f : trimRangeXN + trimRangeYN >= 5f ? 0.5f : 0.25f;
         }
-
-        private float lastEditorTime = 0;
 
         public void Update()
         {
@@ -188,7 +207,7 @@ namespace GimbalTrim
             if (HighLogic.LoadedSceneIsEditor && Time.time > lastEditorTime + TimeWarp.fixedDeltaTime)
             {
                 lastEditorTime = Time.time;
-                FixedUpdate();
+                DoTrim(EditorLogic.RootPart.transform, EditorMarker_CoM.CraftCoM);
                 int count = originalInitalRots.Count;
                 for (int i = 0; i < count; i++)
                 {
@@ -199,24 +218,52 @@ namespace GimbalTrim
 
         public void FixedUpdate()
         {
-            if (gimbal == null)
+            if (HighLogic.LoadedSceneIsEditor || gimbal == null)
                 return;
+           
+            DoTrim(vessel.ReferenceTransform, vessel.CurrentCoM);
+        }
+
+        private void DoTrim(Transform vesselTransform, Vector3 CoM)
+        {
+            Vector3 localCoM = vesselTransform.transform.InverseTransformPoint(CoM);
+
             int count = originalInitalRots.Count;
             for (int i = 0; i < count; i++)
             {
-                float x = enableTrim ? trimX : 0;
-                float y = enableTrim ? trimY : 0;
+                currentTrim.x = enableTrim ? trimX : 0;
+                currentTrim.z = enableTrim ? trimY : 0;
 
-                if (useTrimlResponseSpeed)
+                Transform gimbalTransform = gimbal.gimbalTransforms[i];
+
+                Vector3 localPos = vesselTransform.InverseTransformPoint(gimbalTransform.position);
+                float sign = 1f;
+                if (localCoM.y < localPos.y)
+                {
+                    sign = -1f;
+                }
+
+                Vector3 localTrim = gimbalTransform.InverseTransformDirection(vesselTransform.TransformDirection(sign * currentTrim));
+
+                if (useTrimResponseSpeed)
                 {
                     float timeFactor = trimResponseSpeed * TimeWarp.fixedDeltaTime;
-                    x = Mathf.Lerp(lastTrimX, x, timeFactor);
-                    y = Mathf.Lerp(lastTrimY, y, timeFactor);
+                    localTrim.x = Mathf.Lerp(oldLocalTrim[i].x, localTrim.x, timeFactor);
+                    localTrim.y = Mathf.Lerp(oldLocalTrim[i].y, localTrim.y, timeFactor);
+                    oldLocalTrim[i] = localTrim;
                 }
-                lastTrimX = x;
-                lastTrimY = y;
 
-                gimbal.initRots[i] = originalInitalRots[i] * Quaternion.AngleAxis(x, Vector3.right) * Quaternion.AngleAxis(y, Vector3.up);
+                //print(localPos.ToString("F2") + " " + currentTrim.ToString("F2") + "  " + localTrim.ToString("F2") + " " + sign.ToString("F0"));
+
+                gimbal.initRots[i] = originalInitalRots[i] * Quaternion.AngleAxis(localTrim.x, Vector3.right) * Quaternion.AngleAxis(localTrim.y, Vector3.up);
+
+                if (limitToGimbalRange)
+                {
+                    gimbal.gimbalRangeXP = trimRangeXP - localTrim.x;
+                    gimbal.gimbalRangeXN = trimRangeXN + localTrim.x;
+                    gimbal.gimbalRangeYP = trimRangeYP - localTrim.y;
+                    gimbal.gimbalRangeYN = trimRangeYN + localTrim.y;
+                }
             }
         }
 
